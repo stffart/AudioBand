@@ -1,0 +1,3 @@
+[submodule "src/MPDAudioSource/mpcCore"]
+	path = src/MPDAudioSource/mpcCore
+	url = https://github.com/stffart/mpcCore.git
