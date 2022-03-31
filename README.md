@@ -1,3 +1,7 @@
+*********************************
+AudioBand audio source plugin for [Music Player Daemon](https://www.musicpd.org/)
+*********************************
+
 <div align="center"><img src="logo/logotype_cover.svg"/></div><br/><br/>
 
 # Audio Band
