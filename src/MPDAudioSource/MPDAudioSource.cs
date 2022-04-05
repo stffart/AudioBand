@@ -302,7 +302,7 @@ namespace MPDAudioSource
             catch (Exception e)
             {
                 Logger.Error($"Error while trying to connect ~ {e.Message}");
-                throw;
+                return false;
             }
         }
 
