@@ -206,8 +206,7 @@ namespace MPDAudioSource
                 await Connect();
                 return;
             }
-
-            if (_currentVolumePercent != newVolume) 
+            if (_currentVolumePercent != newVolume && newVolume >= 0 && _currentIsPlaying)
             {
                 bool result = (await _mpdClient.SendAsync(new MpcCore.Commands.Options.ChangeVolume(newVolume - _currentVolumePercent))).Result;
                 if (result)
