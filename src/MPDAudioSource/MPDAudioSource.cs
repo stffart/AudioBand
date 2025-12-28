@@ -22,6 +22,8 @@ namespace MPDAudioSource
         private MpcCore.MpcCoreClient _mpdClient;
         private int _currentItemId;
         private string _currentTrackName;
+        private Image _currentTrackArt;
+        private string _currentTrackPath;
         private bool _currentIsPlaying = false;
         private int _currentProgress;
         private int _currentVolumePercent;
@@ -31,6 +33,23 @@ namespace MPDAudioSource
         private string _host;
         private int _pollingInterval = 1000;
         private bool _isActive;
+
+        private static readonly System.Threading.SemaphoreSlim _semaphore = new System.Threading.SemaphoreSlim(1, 1);
+
+
+        public async Task<MpcCore.Contracts.IMpcCoreResponse<T>> SendAsync<T>(MpcCore.Contracts.IMpcCoreCommand<T> command)
+        {
+            await _semaphore.WaitAsync();
+            MpcCore.Contracts.IMpcCoreResponse<T> response = null;
+            try
+            {
+                response = await _mpdClient.SendAsync(command);
+            } finally
+            {
+                _semaphore.Release();
+            }
+            return response;
+        }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="MPDAudioSource"/> class.
@@ -62,6 +81,8 @@ namespace MPDAudioSource
 
         /// <inheritdoc />
         public event EventHandler<bool> IsPlayingChanged;
+
+        public event EventHandler<bool> LikeChanged;
 
         /// <inheritdoc />
         public string Name => "MPD";
@@ -147,7 +168,7 @@ namespace MPDAudioSource
             // Play track
             try
             {
-                bool result = (await _mpdClient.SendAsync(new MpcCore.Commands.Player.Play())).Result;
+                bool result = (await SendAsync(new MpcCore.Commands.Player.Play())).Result;
             }
             catch (Exception e)
             {
@@ -162,7 +183,7 @@ namespace MPDAudioSource
         {
             try
             {
-                bool result = (await _mpdClient.SendAsync(new MpcCore.Commands.Player.Pause())).Result;
+                bool result = (await SendAsync(new MpcCore.Commands.Player.Pause())).Result;
             }
             catch (System.Exception e)
             {
@@ -177,7 +198,7 @@ namespace MPDAudioSource
         {
             try
             {
-                bool result = (await _mpdClient.SendAsync(new MpcCore.Commands.Player.Previous())).Result;
+                bool result = (await SendAsync(new MpcCore.Commands.Player.Previous())).Result;
             }
             catch (System.Exception e)
             {
@@ -190,7 +211,7 @@ namespace MPDAudioSource
         {
             try
             {
-                bool result = (await _mpdClient.SendAsync(new MpcCore.Commands.Player.Next())).Result;
+                bool result = (await SendAsync(new MpcCore.Commands.Player.Next())).Result;
             }
             catch (System.Exception e)
             {
@@ -206,9 +227,10 @@ namespace MPDAudioSource
                 await Connect();
                 return;
             }
-            if (_currentVolumePercent != newVolume && newVolume >= 0 && _currentIsPlaying)
+
+            if (_currentVolumePercent != newVolume) 
             {
-                bool result = (await _mpdClient.SendAsync(new MpcCore.Commands.Options.ChangeVolume(newVolume - _currentVolumePercent))).Result;
+                bool result = (await SendAsync(new MpcCore.Commands.Options.ChangeVolume(newVolume - _currentVolumePercent))).Result;
                 if (result)
                 {
                     _currentVolumePercent = newVolume;
@@ -227,7 +249,7 @@ namespace MPDAudioSource
                 return;
             }
 
-            bool result = (await _mpdClient.SendAsync(new MpcCore.Commands.Player.Seek(newProgress.TotalSeconds))).Result;
+            bool result = (await SendAsync(new MpcCore.Commands.Player.Seek(newProgress.TotalSeconds))).Result;
 
             await Task.Delay(110).ContinueWith(async t => await UpdatePlayer());
         }
@@ -241,7 +263,7 @@ namespace MPDAudioSource
                 return;
             }
 
-            bool result = (await _mpdClient.SendAsync(new MpcCore.Commands.Options.SetRandom(shuffleOn))).Result;
+            bool result = (await SendAsync(new MpcCore.Commands.Options.SetRandom(shuffleOn))).Result;
 
             await Task.Delay(110).ContinueWith(async t => await UpdatePlayer());
         }
@@ -260,16 +282,16 @@ namespace MPDAudioSource
             switch (newRepeatMode)
             {
                 case RepeatMode.Off:
-                    result1 = (await _mpdClient.SendAsync(new MpcCore.Commands.Options.SetRepeat(false))).Result;
-                    result2 = (await _mpdClient.SendAsync(new MpcCore.Commands.Options.SetSingle(false))).Result;
+                    result1 = (await SendAsync(new MpcCore.Commands.Options.SetRepeat(false))).Result;
+                    result2 = (await SendAsync(new MpcCore.Commands.Options.SetSingle(false))).Result;
                     break;
                 case RepeatMode.RepeatContext:
-                    result1 = (await _mpdClient.SendAsync(new MpcCore.Commands.Options.SetRepeat(true))).Result;
-                    result2 = (await _mpdClient.SendAsync(new MpcCore.Commands.Options.SetSingle(false))).Result;
+                    result1 = (await SendAsync(new MpcCore.Commands.Options.SetRepeat(true))).Result;
+                    result2 = (await SendAsync(new MpcCore.Commands.Options.SetSingle(false))).Result;
                     break;
                 case RepeatMode.RepeatTrack:
-                    result1 = (await _mpdClient.SendAsync(new MpcCore.Commands.Options.SetRepeat(true))).Result;
-                    result2 = (await _mpdClient.SendAsync(new MpcCore.Commands.Options.SetSingle(true))).Result;
+                    result1 = (await SendAsync(new MpcCore.Commands.Options.SetRepeat(true))).Result;
+                    result2 = (await SendAsync(new MpcCore.Commands.Options.SetSingle(true))).Result;
                     break;
                 default:
                     Logger.Warn($"No case for {newRepeatMode}");
@@ -301,7 +323,7 @@ namespace MPDAudioSource
             catch (Exception e)
             {
                 Logger.Error($"Error while trying to connect ~ {e.Message}");
-                return false;
+                throw;
             }
         }
 
@@ -310,22 +332,30 @@ namespace MPDAudioSource
             // Local files have no id so we use name
             if (track.Id == _currentItemId && track.Title == _currentTrackName)
             {
-                return;
+                if (_currentTrackArt != null)
+                {
+                    return;
+                }
             }
 
-            MpcCore.Contracts.Mpd.IBinaryChunk responseReadPicture = (await _mpdClient.SendAsync(new MpcCore.Commands.Database.ReadPicture(track.Path))).Result;
+            MpcCore.Contracts.Mpd.IBinaryChunk responseReadPicture = (await SendAsync(new MpcCore.Commands.Database.ReadPicture(track.Path))).Result;
             if (responseReadPicture == null)
             {
-                responseReadPicture = (await _mpdClient.SendAsync(new MpcCore.Commands.Database.GetAlbumArt(track.Path))).Result;
+                responseReadPicture = (await SendAsync(new MpcCore.Commands.Database.GetAlbumArt(track.Path))).Result;
             }
             Image albumart = null;
             if (responseReadPicture != null)
             {
-                albumart = new ImageConverter().ConvertFrom(responseReadPicture.Binary) as Image;
+                if (responseReadPicture.Binary != null)
+                {
+                    albumart = new ImageConverter().ConvertFrom(responseReadPicture.Binary) as Image;
+                }
             }
 
             _currentItemId = track.Id;
             _currentTrackName = track.Title;
+            _currentTrackPath = track.Path;
+            _currentTrackArt = albumart;
 
             string artists = track.Artist;
             System.TimeSpan trackLength = TimeSpan.FromSeconds(0);
@@ -351,6 +381,8 @@ namespace MPDAudioSource
             };
 
             TrackInfoChanged?.Invoke(this, trackUpdateInfo);
+
+            LikeChanged?.Invoke(this, track.Like);
         }
 
 
@@ -438,7 +470,7 @@ namespace MPDAudioSource
 
             try
             {
-                MpcCore.Contracts.Mpd.IStatus status = (await _mpdClient.SendAsync(new MpcCore.Commands.Status.GetStatus())).Result;
+                MpcCore.Contracts.Mpd.IStatus status = (await SendAsync(new MpcCore.Commands.Status.GetStatus())).Result;
                 if (status != null)
                 {
                     NotifyPlayState(status.IsPlaying);
@@ -448,7 +480,7 @@ namespace MPDAudioSource
                     NotifyRepeat(status.Repeat, status.Single);
                 }
 
-                MpcCore.Contracts.Mpd.IItem currentTrack = (await _mpdClient.SendAsync(new MpcCore.Commands.Status.GetCurrentSong())).Result;                  
+                MpcCore.Contracts.Mpd.IItem currentTrack = (await SendAsync(new MpcCore.Commands.Status.GetCurrentSong())).Result;                  
                 if (currentTrack == null)
                 {
                     // Playback can be null if there are no devices playing
@@ -498,5 +530,16 @@ namespace MPDAudioSource
             }
         }
 
+        public async Task SetLikeTrackAsync()
+        {
+//            MpcCore.Contracts.Mpd.IItem currentTrack = (await _mpdClient.SendAsync(new MpcCore.Commands.Status.GetCurrentSong())).Result;
+            if (_currentTrackPath != null)
+            {
+                await SendAsync(new MpcCore.Commands.Playlist.SaveQueueToPlaylist("liked:switch:" + _currentTrackPath));
+                return;
+            }
+        }
+
+       
     }
 }
