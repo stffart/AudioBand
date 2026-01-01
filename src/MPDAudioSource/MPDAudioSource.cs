@@ -39,7 +39,7 @@ namespace MPDAudioSource
 
         public async Task<MpcCore.Contracts.IMpcCoreResponse<T>> SendAsync<T>(MpcCore.Contracts.IMpcCoreCommand<T> command)
         {
-            await _semaphore.WaitAsync();
+            await _semaphore.WaitAsync(5000);
             MpcCore.Contracts.IMpcCoreResponse<T> response = null;
             try
             {
@@ -48,6 +48,7 @@ namespace MPDAudioSource
             {
                 _semaphore.Release();
             }
+
             return response;
         }
 
@@ -480,12 +481,11 @@ namespace MPDAudioSource
                     NotifyRepeat(status.Repeat, status.Single);
                 }
 
-                MpcCore.Contracts.Mpd.IItem currentTrack = (await SendAsync(new MpcCore.Commands.Status.GetCurrentSong())).Result;                  
+                MpcCore.Contracts.Mpd.IItem currentTrack = (await SendAsync(new MpcCore.Commands.Status.GetCurrentSong())).Result;
                 if (currentTrack == null)
                 {
                     // Playback can be null if there are no devices playing
                     await Task.Delay(TimeSpan.FromSeconds(1));
-                    return;
                 }
                 else
                 {
